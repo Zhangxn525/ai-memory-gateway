@@ -738,3 +738,79 @@ async function clearSummary() {
         closeSummaryModal(); loadThreads();
     } catch(e) { alert('请求失败: ' + e.message); }
 }
+
+// ============================================================
+// 对话记录导入导出
+// ============================================================
+
+async function exportConversations() {
+    try {
+        const resp = await fetch('/api/conversations/export');
+        const data = await resp.json();
+        if (data.error) { alert('导出失败: ' + data.error); return; }
+        
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        const now = new Date();
+        const ts = now.getFullYear() + 
+            String(now.getMonth()+1).padStart(2,'0') + 
+            String(now.getDate()).padStart(2,'0') + '_' +
+            String(now.getHours()).padStart(2,'0') + 
+            String(now.getMinutes()).padStart(2,'0') + 
+            String(now.getSeconds()).padStart(2,'0');
+        a.href = url;
+        a.download = 'conversations_backup_' + ts + '.json';
+        a.click();
+        URL.revokeObjectURL(url);
+    } catch(e) { alert('导出失败: ' + e.message); }
+}
+
+async function importConversations(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    
+    const statusEl = document.getElementById('conv-import-status');
+    statusEl.textContent = '读取文件中...';
+    statusEl.style.color = 'var(--text-muted)';
+    
+    try {
+        const text = await file.text();
+        const records = JSON.parse(text);
+        
+        if (!Array.isArray(records)) {
+            statusEl.textContent = '❌ 格式错误：需要 JSON 数组';
+            statusEl.style.color = '#e53e3e';
+            return;
+        }
+        
+        if (!confirm('确认导入 ' + records.length + ' 条对话记录？（已存在的会自动跳过）')) {
+            statusEl.textContent = '';
+            event.target.value = '';
+            return;
+        }
+        
+        statusEl.textContent = '导入中... (' + records.length + ' 条)';
+        
+        const resp = await fetch('/api/conversations/import', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(records)
+        });
+        const data = await resp.json();
+        
+        if (data.error) {
+            statusEl.textContent = '❌ ' + data.error;
+            statusEl.style.color = '#e53e3e';
+        } else {
+            statusEl.textContent = '✅ 导入完成！新增 ' + data.imported + ' 条，跳过 ' + data.skipped + ' 条（已存在）';
+            statusEl.style.color = '#38a169';
+            loadConversationList(1);
+        }
+    } catch(e) {
+        statusEl.textContent = '❌ ' + e.message;
+        statusEl.style.color = '#e53e3e';
+    }
+    
+    event.target.value = '';
+}
