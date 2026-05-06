@@ -114,6 +114,9 @@ function switchSection(name) {
     if (name === 'threads') {
         loadThreads();
     }
+    if (name === 'settings') {
+        loadSettings();
+    }
 }
 
 // ============================================
@@ -1819,3 +1822,239 @@ function updateBackfillProgress(done, total) {
 }
 
 
+// ============================================
+// 设置面板
+// ============================================
+
+let _settingsLoaded = false;
+let _modelList = [];
+
+// 所有需要读写的字段 key（开源版：EMBEDDING_API_KEY + EMBEDDING_BASE_URL）
+const _SETTINGS_FIELDS = {
+    str: ['API_BASE_URL', 'API_KEY', 'DEFAULT_MODEL', 'MEMORY_MODEL',
+          'CACHE_SUMMARY_MODEL', 'EMBEDDING_API_KEY', 'EMBEDDING_BASE_URL', 'EMBEDDING_MODEL', 'REASONING_EFFORT'],
+    int: ['MAX_MEMORIES_INJECT', 'MEMORY_EXTRACT_INTERVAL', 'CACHE_PARTITION_X', 'EMBEDDING_DIM'],
+    float: ['MIN_SCORE_THRESHOLD'],
+    bool: ['MEMORY_ENABLED', 'CACHE_PARTITION_ENABLED', 'MEMORY_VECTOR_ENABLED', 'FORCE_STREAM'],
+    range: ['MEMORY_HW_KEYWORD', 'MEMORY_HW_SEMANTIC', 'MEMORY_HW_IMPORTANCE',
+            'MEMORY_HW_RECENCY', 'MEMORY_SEMANTIC_THRESHOLD'],
+    text: ['systemPrompt'],
+};
+
+const _MODEL_COMBOS = ['DEFAULT_MODEL', 'MEMORY_MODEL', 'CACHE_SUMMARY_MODEL'];
+
+async function loadSettings() {
+    try {
+        const resp = await fetch('/api/settings');
+        const data = await resp.json();
+        if (data.error) { showSettingsMsg('error', '加载失败: ' + data.error); return; }
+        const s = data.settings;
+
+        // 字符串字段
+        _SETTINGS_FIELDS.str.forEach(k => {
+            const el = document.getElementById('set-' + k);
+            if (el) el.value = s[k] || '';
+        });
+        // 打码字段提示
+        ['API_KEY', 'EMBEDDING_API_KEY'].forEach(k => {
+            const hint = document.getElementById('set-' + k + '-hint');
+            if (hint && s[k]) hint.textContent = '当前: ' + s[k];
+        });
+        // 整数
+        _SETTINGS_FIELDS.int.forEach(k => {
+            const el = document.getElementById('set-' + k);
+            if (el) el.value = s[k];
+        });
+        // 浮点
+        _SETTINGS_FIELDS.float.forEach(k => {
+            const el = document.getElementById('set-' + k);
+            if (el) el.value = s[k];
+        });
+        // 布尔（checkbox）
+        _SETTINGS_FIELDS.bool.forEach(k => {
+            const el = document.getElementById('set-' + k);
+            if (el) el.checked = !!s[k];
+        });
+        // 滑块
+        _SETTINGS_FIELDS.range.forEach(k => {
+            const el = document.getElementById('set-' + k);
+            if (el) { el.value = s[k]; updateSliderVal(k); }
+        });
+        // 长文本
+        const promptEl = document.getElementById('set-systemPrompt');
+        if (promptEl) {
+            promptEl.value = s.systemPrompt || '';
+            updatePromptCount();
+        }
+        // REASONING_EFFORT 下拉
+        const reEl = document.getElementById('set-REASONING_EFFORT');
+        if (reEl) reEl.value = s.REASONING_EFFORT || '';
+
+        // 加载模型列表（首次）
+        if (!_settingsLoaded) loadModelList();
+        _settingsLoaded = true;
+    } catch (e) {
+        showSettingsMsg('error', '加载设置失败: ' + e.message);
+    }
+}
+
+async function saveSettings() {
+    const btn = document.getElementById('save-settings-btn');
+    btn.disabled = true;
+    btn.textContent = '保存中...';
+
+    const payload = {};
+
+    // 字符串
+    _SETTINGS_FIELDS.str.forEach(k => {
+        const el = document.getElementById('set-' + k);
+        if (el) payload[k] = el.value;
+    });
+    // 整数
+    _SETTINGS_FIELDS.int.forEach(k => {
+        const el = document.getElementById('set-' + k);
+        if (el) payload[k] = parseInt(el.value) || 0;
+    });
+    // 浮点
+    _SETTINGS_FIELDS.float.forEach(k => {
+        const el = document.getElementById('set-' + k);
+        if (el) payload[k] = parseFloat(el.value) || 0;
+    });
+    // 布尔
+    _SETTINGS_FIELDS.bool.forEach(k => {
+        const el = document.getElementById('set-' + k);
+        if (el) payload[k] = el.checked;
+    });
+    // 滑块
+    _SETTINGS_FIELDS.range.forEach(k => {
+        const el = document.getElementById('set-' + k);
+        if (el) payload[k] = parseFloat(el.value) || 0;
+    });
+    // 长文本
+    const promptEl = document.getElementById('set-systemPrompt');
+    if (promptEl) payload.systemPrompt = promptEl.value;
+
+    try {
+        const resp = await fetch('/api/settings', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await resp.json();
+        if (data.error) {
+            showSettingsMsg('error', '保存失败: ' + data.error);
+        } else {
+            const msg = `已更新 ${data.updated?.length || 0} 项` +
+                        (data.skipped?.length ? `，跳过 ${data.skipped.length} 项（未修改）` : '');
+            showSettingsMsg('success', msg);
+        }
+    } catch (e) {
+        showSettingsMsg('error', '保存失败: ' + e.message);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '保存设置';
+    }
+}
+
+async function loadModelList() {
+    const hint = document.getElementById('model-count-hint');
+    if (hint) hint.textContent = '加载模型列表...';
+    try {
+        const resp = await fetch('/api/models');
+        const data = await resp.json();
+        _modelList = data.models || [];
+
+        _MODEL_COMBOS.forEach(fieldName => {
+            renderComboDropdown(fieldName, _modelList);
+        });
+
+        if (hint) {
+            hint.textContent = _modelList.length > 0
+                ? `共 ${_modelList.length} 个可用模型 (${data.provider || ''})`
+                : '无法获取模型列表，请手动输入';
+        }
+    } catch (e) {
+        if (hint) hint.textContent = '模型列表加载失败';
+    }
+}
+
+function renderComboDropdown(fieldName, models) {
+    const dropdown = document.getElementById('dropdown-' + fieldName);
+    if (!dropdown) return;
+    dropdown.innerHTML = '';
+    models.forEach(m => {
+        const div = document.createElement('div');
+        div.className = 'combo-option';
+        div.textContent = m.name || m.id;
+        div.dataset.value = m.id;
+        div.addEventListener('click', () => {
+            document.getElementById('set-' + fieldName).value = m.id;
+            dropdown.classList.remove('open');
+        });
+        dropdown.appendChild(div);
+    });
+}
+
+function filterCombo(fieldName) {
+    const input = document.getElementById('set-' + fieldName);
+    const dropdown = document.getElementById('dropdown-' + fieldName);
+    if (!input || !dropdown) return;
+    const q = input.value.toLowerCase();
+    let visible = 0;
+    dropdown.querySelectorAll('.combo-option').forEach(opt => {
+        const match = !q || opt.textContent.toLowerCase().includes(q) || (opt.dataset.value || '').toLowerCase().includes(q);
+        opt.style.display = match ? '' : 'none';
+        if (match) visible++;
+    });
+    if (visible > 0 && q) dropdown.classList.add('open');
+}
+
+// 初始化 combo-box 交互
+document.addEventListener('DOMContentLoaded', () => {
+    _MODEL_COMBOS.forEach(fieldName => {
+        const input = document.getElementById('set-' + fieldName);
+        const dropdown = document.getElementById('dropdown-' + fieldName);
+        if (!input || !dropdown) return;
+
+        input.addEventListener('focus', () => { dropdown.classList.add('open'); });
+        input.addEventListener('input', () => { filterCombo(fieldName); });
+    });
+
+    // 点击外部关闭所有 combo
+    document.addEventListener('click', (e) => {
+        _MODEL_COMBOS.forEach(fieldName => {
+            const box = document.getElementById('combo-' + fieldName);
+            const dropdown = document.getElementById('dropdown-' + fieldName);
+            if (box && dropdown && !box.contains(e.target)) {
+                dropdown.classList.remove('open');
+            }
+        });
+    });
+});
+
+function updateSliderVal(key) {
+    const el = document.getElementById('set-' + key);
+    const span = document.getElementById('val-' + key);
+    if (el && span) span.textContent = parseFloat(el.value).toFixed(2);
+}
+
+function updatePromptCount() {
+    const el = document.getElementById('set-systemPrompt');
+    const hint = document.getElementById('prompt-char-count');
+    if (el && hint) hint.textContent = el.value.length + ' 字';
+}
+
+// 绑定 prompt 字数实时更新
+document.addEventListener('DOMContentLoaded', () => {
+    const p = document.getElementById('set-systemPrompt');
+    if (p) p.addEventListener('input', updatePromptCount);
+});
+
+function showSettingsMsg(type, text) {
+    const el = document.getElementById('settings-msg');
+    if (!el) return;
+    el.style.display = 'block';
+    el.className = 'msg-box msg-' + type;
+    el.textContent = text;
+    setTimeout(() => { el.style.display = 'none'; }, 5000);
+}
