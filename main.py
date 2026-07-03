@@ -484,8 +484,9 @@ async def generate_summary(messages: list, session_id: str = "") -> str:
 摘要："""
     
     try:
+        # 摘要请求发往主API_BASE_URL，直接用主API_KEY（MEMORY_API_KEY可能是其他提供商的key）
         headers = {
-            "Authorization": f"Bearer {get_memory_api_key()}",
+            "Authorization": f"Bearer {API_KEY}",
             "Content-Type": "application/json",
         }
         if "openrouter" in API_BASE_URL:
@@ -495,15 +496,21 @@ async def generate_summary(messages: list, session_id: str = "") -> str:
         async with httpx.AsyncClient(timeout=60) as client:
             response = await client.post(API_BASE_URL, headers=headers, json={
                 "model": CACHE_SUMMARY_MODEL,
-                "max_tokens": 500,
+                # 推理模型的思考也消耗max_tokens，给足空间避免content为空
+                "max_tokens": 2000,
                 "messages": [{"role": "user", "content": prompt}],
             })
             if response.status_code == 200:
                 data = response.json()
                 if "choices" in data:
-                    summary = data["choices"][0]["message"]["content"].strip()
-                    print(f"📝 摘要生成完成: {len(summary)}字 (压缩{len(messages)}条消息)")
-                    return summary
+                    # 推理模型偶发返回content为None（思考吃光token或只返回reasoning_content）
+                    content = data["choices"][0]["message"].get("content") or ""
+                    summary = content.strip()
+                    if summary:
+                        print(f"📝 摘要生成完成: {len(summary)}字 (压缩{len(messages)}条消息)")
+                        return summary
+                    print(f"⚠️ 摘要生成失败: 模型返回空content（推理模型思考可能吃光了max_tokens），本次轮转将推迟重试")
+                    return ""
 
         print(f"⚠️ 摘要生成失败: HTTP {response.status_code}")
         return ""
@@ -661,7 +668,13 @@ async def build_partitioned_messages(
         new_summary = await generate_summary(a_msgs, session_id)
         if new_summary:
             summary_parts.append(new_summary)
-        
+        elif CACHE_SUMMARY_MODEL:
+            # 配置了摘要模型但生成失败（网络/空content等）：中止本次轮转不推进滑窗，
+            # A区消息保留在上下文里，下次请求重试。只有纯轮转模式（模型留空）才无摘要直接滑出。
+            rotation_count -= 1
+            print(f"⚠️ 摘要生成失败，本次轮转中止，下次请求重试（A区消息未丢失）")
+            break
+
         a_start_round += X
         a_end_round = a_start_round + X
         a_round_groups = rounds[a_start_round : a_end_round]
