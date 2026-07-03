@@ -615,6 +615,7 @@ async def save_memory(content: str, importance: int = 5, source_session: str = "
                     await save_memory_embedding(conn, row['id'], embedding)
             except Exception as e:
                 print(f"⚠️ 记忆 {row['id']} embedding自动计算失败: {e}")
+        return row["id"] if row else None
 
 
 async def search_memories(query: str, limit: int = 10):
