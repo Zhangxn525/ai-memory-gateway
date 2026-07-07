@@ -515,6 +515,14 @@
                         <small class="form-hint">仅 time 模式生效，A区最早消息超过此时间后触发轮转</small>
                     </div>
                     <div class="settings-field">
+                        <label>缓存TTL (CACHE_TTL)</label>
+                        <select id="set-CACHE_TTL" class="input">
+                            <option value="5m">5分钟（默认，写入1.25x）</option>
+                            <option value="1h">1小时（写入2x，读0.1x，消息间隔常超5分钟更划算）</option>
+                        </select>
+                        <small class="form-hint">上游需支持 Anthropic cache_control ttl（Claude 原生 API / OpenRouter 均支持）</small>
+                    </div>
+                    <div class="settings-field">
                         <label>摘要模型</label>
                         <div class="combo-box" id="combo-CACHE_SUMMARY_MODEL">
                             <input type="text" id="set-CACHE_SUMMARY_MODEL" class="combo-input" placeholder="搜索或输入模型名..." autocomplete="off">
